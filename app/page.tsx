@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { supabase } from "../lib/supabase"; // 방금 만든 연결 장치 가져오기
 import { 
   format, 
   startOfMonth, 
@@ -24,19 +25,18 @@ import {
   Circle 
 } from "lucide-react";
 
-// 데이터 타입 정의
+// Supabase 데이터 타입 정의
 interface Todo {
   id: number;
   content: string;
   completed: boolean;
-  date: string; // YYYY-MM-DD
+  date: string;
   startTime: string;
   endTime: string;
-  category: "Work" | "Personal" | "Health" | "Etc";
+  category: string;
 }
 
-// 카테고리별 색상 설정
-const CATEGORY_COLORS = {
+const CATEGORY_COLORS: Record<string, string> = {
   Work: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
   Personal: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
   Health: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
@@ -44,35 +44,43 @@ const CATEGORY_COLORS = {
 };
 
 export default function CalendarApp() {
-  // 상태 관리
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [todos, setTodos] = useState<Todo[]>([]);
   const [darkMode, setDarkMode] = useState(false);
+  const [loading, setLoading] = useState(true); // 로딩 상태 추가
 
   // 입력 폼 상태
   const [inputContent, setInputContent] = useState("");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
-  const [category, setCategory] = useState<"Work" | "Personal" | "Health" | "Etc">("Work");
+  const [category, setCategory] = useState("Work");
 
-  // 초기 로드 (로컬 스토리지 & 다크모드)
+  // 1. 초기 로드: Supabase에서 데이터 가져오기
   useEffect(() => {
-    const savedTodos = localStorage.getItem("my-calendar-todos");
-    if (savedTodos) {
-      setTodos(JSON.parse(savedTodos));
-    }
+    fetchTodos();
     
-    // 다크모드 설정 확인
-    if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+    // 다크모드 확인
+    if (typeof window !== 'undefined' && window.matchMedia("(prefers-color-scheme: dark)").matches) {
       setDarkMode(true);
     }
   }, []);
 
-  // 데이터 저장 및 다크모드 적용
-  useEffect(() => {
-    localStorage.setItem("my-calendar-todos", JSON.stringify(todos));
-  }, [todos]);
+  // Supabase에서 할 일 목록 불러오기 함수
+  const fetchTodos = async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('todos')
+      .select('*')
+      .order('id', { ascending: true }); // 만든 순서대로 정렬
+
+    if (error) {
+      console.error('데이터 불러오기 실패:', error);
+    } else {
+      setTodos(data || []);
+    }
+    setLoading(false);
+  };
 
   useEffect(() => {
     if (darkMode) {
@@ -82,46 +90,75 @@ export default function CalendarApp() {
     }
   }, [darkMode]);
 
-  // 달력 계산 로직
+  // 달력 계산
   const monthStart = startOfMonth(currentDate);
   const monthEnd = endOfMonth(monthStart);
   const startDate = startOfWeek(monthStart);
   const endDate = endOfWeek(monthEnd);
   const calendarDays = eachDayOfInterval({ start: startDate, end: endDate });
 
-  // CRUD 기능
-  const addTodo = () => {
+  // 2. 추가하기 (Insert)
+  const addTodo = async () => {
     if (!inputContent.trim()) return;
-    
-    const newTodo: Todo = {
-      id: Date.now(),
+
+    const newTodo = {
       content: inputContent,
-      completed: false,
       date: format(selectedDate, "yyyy-MM-dd"),
       startTime,
       endTime,
       category,
+      completed: false,
     };
 
-    setTodos([...todos, newTodo]);
-    setInputContent("");
-    setStartTime("");
-    setEndTime("");
+    // Supabase에 저장
+    const { data, error } = await supabase
+      .from('todos')
+      .insert([newTodo])
+      .select();
+
+    if (error) {
+      console.error('저장 실패:', error);
+      alert("저장에 실패했습니다 ㅠㅠ");
+    } else if (data) {
+      setTodos([...todos, data[0]]); // 화면에도 바로 반영
+      setInputContent("");
+      setStartTime("");
+      setEndTime("");
+    }
   };
 
-  const deleteTodo = (id: number) => {
-    setTodos(todos.filter((todo) => todo.id !== id));
+  // 3. 삭제하기 (Delete)
+  const deleteTodo = async (id: number) => {
+    const { error } = await supabase
+      .from('todos')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('삭제 실패:', error);
+    } else {
+      setTodos(todos.filter((todo) => todo.id !== id));
+    }
   };
 
-  const toggleTodo = (id: number) => {
-    setTodos(
-      todos.map((todo) =>
-        todo.id === id ? { ...todo, completed: !todo.completed } : todo
-      )
-    );
+  // 4. 완료 체크 토글 (Update)
+  const toggleTodo = async (id: number, currentStatus: boolean) => {
+    const { error } = await supabase
+      .from('todos')
+      .update({ completed: !currentStatus })
+      .eq('id', id);
+
+    if (error) {
+      console.error('수정 실패:', error);
+    } else {
+      setTodos(
+        todos.map((todo) =>
+          todo.id === id ? { ...todo, completed: !todo.completed } : todo
+        )
+      );
+    }
   };
 
-  // 선택된 날짜의 할 일 필터링
   const selectedDateTodos = todos.filter(
     (todo) => todo.date === format(selectedDate, "yyyy-MM-dd")
   );
@@ -130,9 +167,8 @@ export default function CalendarApp() {
     <div className={`min-h-screen transition-colors duration-300 ${darkMode ? "bg-gray-900 text-white" : "bg-gray-50 text-gray-900"}`}>
       <div className="max-w-6xl mx-auto p-6 h-screen flex flex-col">
         
-        {/* 헤더 */}
         <header className="flex justify-between items-center mb-8">
-          <h1 className="text-2xl font-bold">My Calendar</h1>
+          <h1 className="text-2xl font-bold">My Cloud Calendar ☁️</h1>
           <button
             onClick={() => setDarkMode(!darkMode)}
             className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition"
@@ -141,10 +177,9 @@ export default function CalendarApp() {
           </button>
         </header>
 
-        {/* 메인 컨텐츠 (Split View) */}
         <div className="flex flex-col lg:flex-row gap-8 flex-1 overflow-hidden">
           
-          {/* 왼쪽: 달력 */}
+          {/* 달력 영역 */}
           <div className="flex-1 bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 flex flex-col">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-semibold">
@@ -175,7 +210,6 @@ export default function CalendarApp() {
                   `}
                 >
                   <span>{format(day, "d")}</span>
-                  {/* 일정이 있는 날짜 표시 점 */}
                   {todos.some(t => t.date === format(day, "yyyy-MM-dd")) && (
                     <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isSameDay(day, selectedDate) ? "bg-white" : "bg-blue-500"}`} />
                   )}
@@ -184,7 +218,7 @@ export default function CalendarApp() {
             </div>
           </div>
 
-          {/* 오른쪽: 투두 리스트 */}
+          {/* 투두 리스트 영역 */}
           <div className="flex-1 bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 flex flex-col">
             <h2 className="text-xl font-semibold mb-6 flex items-center gap-2">
               {format(selectedDate, "M월 d일")}의 일정
@@ -193,7 +227,6 @@ export default function CalendarApp() {
               </span>
             </h2>
 
-            {/* 입력 폼 */}
             <div className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-xl mb-6 space-y-3">
               <input
                 type="text"
@@ -219,7 +252,7 @@ export default function CalendarApp() {
                 />
                 <select 
                   value={category}
-                  onChange={(e) => setCategory(e.target.value as any)}
+                  onChange={(e) => setCategory(e.target.value)}
                   className="p-2 rounded-lg border border-gray-200 dark:border-gray-600 dark:bg-gray-800 text-sm flex-1"
                 >
                   <option value="Work">업무</option>
@@ -230,15 +263,17 @@ export default function CalendarApp() {
               </div>
               <button
                 onClick={addTodo}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-medium transition flex items-center justify-center gap-2"
+                disabled={loading}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-medium transition flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                <Plus size={18} /> 추가하기
+                <Plus size={18} /> {loading ? "로딩 중..." : "추가하기"}
               </button>
             </div>
 
-            {/* 리스트 목록 */}
             <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
-              {selectedDateTodos.length === 0 ? (
+              {loading ? (
+                 <div className="text-center text-gray-500 py-10">데이터 불러오는 중... ⏳</div>
+              ) : selectedDateTodos.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-gray-400">
                   <p>등록된 일정이 없습니다.</p>
                 </div>
@@ -252,7 +287,7 @@ export default function CalendarApp() {
                     `}
                   >
                     <button
-                      onClick={() => toggleTodo(todo.id)}
+                      onClick={() => toggleTodo(todo.id, todo.completed)}
                       className={`mt-1 flex-shrink-0 ${todo.completed ? "text-blue-500" : "text-gray-300 dark:text-gray-500 hover:text-blue-500"}`}
                     >
                       {todo.completed ? <CheckCircle2 size={20} /> : <Circle size={20} />}
@@ -260,11 +295,12 @@ export default function CalendarApp() {
                     
                     <div className="flex-1 min-w-0">
                       <div className="flex flex-wrap gap-2 items-center mb-1">
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${CATEGORY_COLORS[todo.category]}`}>
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${CATEGORY_COLORS[todo.category] || CATEGORY_COLORS.Etc}`}>
                           {todo.category === 'Work' && '업무'}
                           {todo.category === 'Personal' && '개인'}
                           {todo.category === 'Health' && '운동'}
                           {todo.category === 'Etc' && '기타'}
+                          {!['Work', 'Personal', 'Health', 'Etc'].includes(todo.category) && todo.category}
                         </span>
                         {(todo.startTime || todo.endTime) && (
                           <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
